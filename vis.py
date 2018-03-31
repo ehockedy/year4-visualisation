@@ -66,7 +66,7 @@ def tiff_to_3d():  # http://vtk.1045678.n5.nabble.com/reconstruct-a-stack-of-TIF
     #print(array)
     # Create renderer
     ren = vtk.vtkRenderer()
-    ren.SetBackground( 0.329412, 0.34902, 0.427451 ) #Paraview blue
+    ren.SetBackground(0.329412, 0.34902, 0.427451) #Paraview blue
 
     #print(volume)
     #volume_mapper = vtk.vtkDataSetMapper()
@@ -90,7 +90,7 @@ def tiff_to_3d():  # http://vtk.1045678.n5.nabble.com/reconstruct-a-stack-of-TIF
 
     # Set an user interface interactor for the render window
     iren = vtk.vtkRenderWindowInteractor()
-    iren.SetRenderWindow(renWin) 
+    iren.SetRenderWindow(renWin)
 
     # Start the initialization and rendering
     iren.Initialize()
@@ -140,9 +140,118 @@ def load_binary_values(start=0, stop=0):
     return pixel_vals
 
 
-def visualise_convex_hull(points, num_slices, surface=False, width=256, height=256):
+def visualise_marching_cubes_2(points, num_slices, width=256, height=256):
+    img_data = vtk.vtkImageData()  # Poly data to hold information about the model
+    img_data.SetDimensions(width, height, num_slices)
+    img_data.AllocateScalars(vtk.VTK_DOUBLE, 1)
+    point_counter = 0
+    for z in range(0, num_slices):
+        for y in range(0, height):
+            for x in range(0, width):
+                img_data.SetScalarComponentFromDouble(x, y, z, 0, points[point_counter])  # Must be double for this version of vtk (>=4.4)
+                #print(points[point_counter], img_data.GetScalarComponentAsDouble(x, y, z, 0))
+                point_counter+=1
+
+    mapper = vtk.vtkPolyDataMapper()
+
+    mc = vtk.vtkMarchingCubes()
+    mc.ComputeNormalsOn()
+    mc.SetValue(0, 800)
+    mc.SetInputData(img_data)
+    mc.ComputeNormalsOn()
+
+    # surface = vtk.vtkSurfaceReconstructionFilter()
+    # surface.SetInputData(delaunay.GetOutput())
+
+    # cf = vtk.vtkContourFilter()
+    # cf.SetInputConnection(surface.GetOutputPort())
+    # cf.SetValue(0, 0.0)
+
+    # reverse = vtk.vtkReverseSense()
+    # reverse.SetInputConnection(cf.GetOutputPort())
+    # reverse.ReverseCellsOn()
+    # reverse.ReverseNormalsOn()
+
+    mapper.SetInputConnection(mc.GetOutputPort())
+    mapper.ScalarVisibilityOff()
+
+    actor = vtk.vtkActor()
+    actor.SetMapper(mapper)
+    actor.GetProperty().SetPointSize(2)
+    return actor
+
+
+def visualise_marching_cubes(points, num_slices, width=256, height=256):
     poly_data = vtk.vtkPolyData()  # Poly data to hold information about the model
     hull = vtk.vtkConvexHull2D()  # Objectt o perform 2D convex hull - do this on each slice of the image
+    hull_points = vtk.vtkPoints()  # The points that will be in the final hull. Combine all 2D hulls to get a 3D hull
+    hull_verts = vtk.vtkCellArray()  # Ther corresponding vertices for the model
+    hull_scalars = vtk.vtkFloatArray()
+    point_counter = 0
+    for z in range(0, num_slices):
+        hull_points_slice = vtk.vtkPoints()  # THe hull points for this slice
+        for y in range(0, height):
+            for x in range(0, width):
+                if points[point_counter] > 800 and x > 10 and x < 200 and y > 0 and y < 220:  # Some hard coded boundaries
+                    hull_points_slice.InsertNextPoint(x, y, z)  # Add a point in the current slice
+                point_counter += 1
+        hull_points_out = vtk.vtkPoints()  # The points for the hull of the current slice
+        hull.CalculateConvexHull(hull_points_slice, hull_points_out)  # Calculate the convex hull for this slice
+        for i in range(0, hull_points_out.GetNumberOfPoints()):  # Add the new hull points to the overall point cloud
+            point = hull_points_out.GetPoint(i)
+            hull_points.InsertNextPoint(point[0], point[1], float(z))
+            hull_verts.InsertNextCell(hull_points.GetNumberOfPoints())
+            scalar_pos = z*height*width + y*height + x
+            hull_scalars.InsertNextValue(points[0])
+
+    mapper = vtk.vtkPolyDataMapper()
+
+    poly_data.SetPoints(hull_points)
+    poly_data.SetVerts(hull_verts)
+    poly_data.GetPointData().SetScalars(hull_scalars)
+    print(1)
+    print(hull_points, hull_verts, poly_data.GetOutput())
+    # https://www.vtk.org/Wiki/VTK/Examples/Boneyard/Cxx/PolyData/ConvexHullDelaunay3D
+    #delaunay = vtk.vtkDelaunay3D()  # 3D convex hull mesh
+    #delaunay.SetInputData(poly_data)
+    #delaunay.Update()  # Get the 3D convex hull of the point cloud
+    print(2)
+
+    mc = vtk.vtkMarchingCubes()
+    mc.ComputeNormalsOn()
+    mc.SetValue(0, 20)
+
+    volume = vtk.vtkImageData()
+    volume.SetPoints(hull_points_out)
+    #volume.DeepCopy(poly_data)
+    print(volume)
+    mc.SetInputData(volume)
+    mc.ComputeNormalsOn()
+
+    # surface = vtk.vtkSurfaceReconstructionFilter()
+    # surface.SetInputData(delaunay.GetOutput())
+
+    # cf = vtk.vtkContourFilter()
+    # cf.SetInputConnection(surface.GetOutputPort())
+    # cf.SetValue(0, 0.0)
+
+    # reverse = vtk.vtkReverseSense()
+    # reverse.SetInputConnection(cf.GetOutputPort())
+    # reverse.ReverseCellsOn()
+    # reverse.ReverseNormalsOn()
+
+    mapper.SetInputConnection(mc.GetOutputPort())
+    mapper.ScalarVisibilityOff()
+
+    actor = vtk.vtkActor()
+    actor.SetMapper(mapper)
+    actor.GetProperty().SetPointSize(2)
+    return actor
+
+
+def visualise_convex_hull(points, num_slices, surface=True, width=256, height=256):
+    poly_data = vtk.vtkPolyData()  # Poly data to hold information about the model
+    hull = vtk.vtkConvexHull2D()  # Object to perform 2D convex hull - do this on each slice of the image
     hull_points = vtk.vtkPoints()  # The points that will be in the final hull. Combine all 2D hulls to get a 3D hull
     hull_verts = vtk.vtkCellArray()  # Ther corresponding vertices for the model
     point_counter = 0
@@ -158,17 +267,27 @@ def visualise_convex_hull(points, num_slices, surface=False, width=256, height=2
         for i in range(0, hull_points_out.GetNumberOfPoints()):  # Add the new hull points to the overall point cloud
             point = hull_points_out.GetPoint(i)
             hull_points.InsertNextPoint(point[0], point[1], float(z))
-            hull_verts.InsertNextCell(hull_points.GetNumberOfPoints())
+            #print(hull_points.GetNumberOfPoints()-1, i)
+            hull_verts.InsertNextCell(hull_points.GetNumberOfPoints()-1)
 
     mapper = vtk.vtkPolyDataMapper()
-
+    #print(poly_data)
+    #for i in range(0, hull_points.GetNumberOfPoints()):
+    #    print(hull_points.GetPoint(i))
+        #print(hull_verts.GetCell(i))
     poly_data.SetPoints(hull_points)
-    poly_data.SetVerts(hull_verts)
+    #poly_data.SetVerts(hull_verts)
+    #print(hull_points, hull_verts)
+    #print(poly_data)
 
     if surface:  # If show with result with a surface instead of point cloud
-        delaunay = vtk.vtkDelaunay3D()  # 3D convex hull object
+        # https://www.vtk.org/Wiki/VTK/Examples/Boneyard/Cxx/PolyData/ConvexHullDelaunay3D
+        delaunay = vtk.vtkDelaunay3D()  # 3D convex hull mesh
+        #print(1)
         delaunay.SetInputData(poly_data)
+        #print(2)
         delaunay.Update()  # Get the 3D convex hull of the point cloud
+        #print(3)
 
         surface = vtk.vtkSurfaceReconstructionFilter()
         surface.SetInputData(delaunay.GetOutput())
@@ -185,6 +304,7 @@ def visualise_convex_hull(points, num_slices, surface=False, width=256, height=2
         mapper.SetInputConnection(cf.GetOutputPort())
         mapper.ScalarVisibilityOff()
     else:  # Show as point cloud
+        poly_data.SetVerts(hull_verts)
         mapper.SetInputData(poly_data)
         #mapper.SetLookupTable(colour_table)
         #mapper.SetScalarVisibility(1)
@@ -441,76 +561,8 @@ def old_attempts(points, num_slices, width=256, height=256):
 start = 1
 stop = 113
 a = load_binary_values(start, stop+1)
-act = visualise_point_cloud(a, stop-start)
+#act = visualise_convex_hull(a, stop-start, True)
+#act = visualise_point_cloud(a, stop-start)
+act = visualise_marching_cubes_2(a, stop-start)
 
 render([act])
-
-
-def load2(img):
-    # DOESN'T WORK, need the use of header file for data
-    smart = vtk.vtkMetaImageReader()
-    smart.SetFileName("dataset/CThead."+str(img))
-    smart.SetFileDimensionality(2)
-    smart.Update()
-
-    actor = vtk.vtkImageActor()
-    actor.GetMapper().SetInputConnection(smart.GetOutputPort())
-    return actor
-
-#print(load_binary_values(1))
-
-
-#tiff_to_3d()
-"""
-# https://www.evl.uic.edu/aspale/cs526/final/3-5-2-0.htm 
-voiHead = vtk.vtkExtractVOI()
-voiHead.SetInputData( data )
-voiHead.SetVOI( 0,255, 60,255, 0,100 )
-voiHead.SetSampleRate( 1,1,1 )
-
-iso = vtk.vtkMarchingCubes()
-iso.SetInputData(voiHead.GetOutput())
-iso.ComputeNormalsOn()
-iso.SetValue(0, 1000)
-
-# Create geometry
-geo = vtk.vtkPolyDataMapper()
-geo.SetInputData( iso.GetOutput() )
-geo.ScalarVisibilityOff()
-
-actorBone = vtk.vtkLODActor()
-actorBone.SetNumberOfCloudPoints( 1000000 )
-actorBone.SetMapper(geo)
-actorBone.GetProperty().SetColor( 1, 1, 1 )
-
-# Create renderer
-ren = vtk.vtkRenderer()
-ren.SetBackground( 0.329412, 0.34902, 0.427451 ) #Paraview blue
-ren.AddActor(actorBone)
-
-# Create a window for the renderer of size 250x250
-renWin = vtk.vtkRenderWindow()
-renWin.AddRenderer(ren)
-renWin.SetSize(500, 500)
-
-# Set an user interface interactor for the render window
-iren = vtk.vtkRenderWindowInteractor()
-iren.SetRenderWindow(renWin) 
-
-# Start the initialization and rendering
-iren.Initialize()
-renWin.Render()
-iren.Start()
-"""
-#dim = data.GetDimensions()
-
-# print(data)
-
-# reader2 = vtk.vtkUnstructuredGridReader()
-# reader2.SetFileName("dataset/CThead.1")
-# reader2.ReadAllVectorsOn()
-# reader2.ReadAllScalarsOn()
-# reader2.Update()
-# data2 = reader2.GetOutput()
-# print(reader2.GetFileType())
-# print(data2)
