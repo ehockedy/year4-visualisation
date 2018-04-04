@@ -1,4 +1,5 @@
 import vtk
+import copy
 
 #dr = vtk.vtkDataReader()
 
@@ -99,59 +100,69 @@ def tiff_to_3d():  # http://vtk.1045678.n5.nabble.com/reconstruct-a-stack-of-TIF
 
 
 class vtkCallback():
-    def __init__(self):
-        self.xmin = 128 # CHANGE THESE FROM HARD CODED
-        self.ymin = 128
-        self.zmin = 56
+    def __init__(self, x, y, z):
+        self.xmin = 0  # CHANGE THESE FROM HARD CODED
+        self.ymin = y/2
+        self.zmin = z/2
+        self.width = x
+        self.height = y
+        self.depth = z
+
     def key_pressed_callback(self, obj, event):
         # https://www.cs.purdue.edu/homes/cs530/code/interactor/interactor_demo.py
         # https://www.vtk.org/Wiki/VTK/Examples/Python/Animation
         key = obj.GetKeySym()
         if key == "s":
-            self.actors[0].VisibilityOff()
+            self.actors[0].SetVisibility(not self.actors[0].GetVisibility())
         elif key == 'd':
-            self.actors[0].VisibilityOn()
+            self.actors[1].SetVisibility(not self.actors[1].GetVisibility())
         elif key == 'k':
             self.plane.SetNormal(1, 0, 0)
             self.xmin += 5
-            self.plane.SetOrigin(self.xmin, 128, 56)
-            #self.plane_points.SetPoint(0, self.xmin, 128, 56)
-            #self.planes.SetPoints(self.plane_points)
-            #print(self.planes.GetPoints().GetPoint(0), self.plane_points.GetPoint(0))
-            #self.planes.GetPlane(0).SetOrigin(self.xmin, 0, 0)
-            #self.planes.SetPlane(0, self.plane)
+            self.plane.SetOrigin(self.xmin, self.height/2, self.depth/2)
         elif key == 'l':
             self.plane.SetNormal(1, 0, 0)
             self.xmin -= 5
-            self.plane.SetOrigin(self.xmin, 128, 56)
+            self.plane.SetOrigin(self.xmin, self.height/2, self.depth/2)
         elif key == 'o':
             self.plane.SetNormal(0, 1, 0)
             self.ymin += 5
-            self.plane.SetOrigin(128, self.ymin, 56)
+            self.plane.SetOrigin(self.width/2, self.ymin, self.depth/2)
         elif key == 'p':
             self.plane.SetNormal(0, 1, 0)
             self.ymin -= 5
-            self.plane.SetOrigin(128, self.ymin, 56)
+            self.plane.SetOrigin(self.width/2, self.ymin, self.depth/2)
         elif key == 'n':
             self.plane.SetNormal(0, 0, 1)
             self.zmin += 5
-            self.plane.SetOrigin(128, 128, self.zmin)
+            self.plane.SetOrigin(self.width/2, self.height/2, self.zmin)
         elif key == 'm':
             self.plane.SetNormal(0, 0, 1)
             self.zmin -= 5
-            self.plane.SetOrigin(128, 128, self.zmin)
+            self.plane.SetOrigin(self.width/2, self.height/2, self.zmin)
+
+        no_change = False
         if self.xmin < 0:
+            self.xmin = 255
+        elif self.xmin > 255:
             self.xmin = 0
-        if self.xmin > 256:
-            self.xmin = 256
-        if self.ymin < 0:
+        elif self.ymin < 0:
+            self.ymin = 255
+        elif self.ymin > 255:
             self.ymin = 0
-        if self.ymin > 256:
-            self.ymin = 256
-        if self.zmin < 0:
+        elif self.zmin < 0:
+            self.zmin = 112
+        elif self.zmin > 112:
             self.zmin = 0
-        if self.zmin > 113:
-            self.zmin = 113
+        else:
+            no_change = True
+        if not no_change:
+            self.clipper_s.SetInsideOut(not self.clipper_s.GetInsideOut())
+            if self.clipper_b is not None:
+                self.clipper_b.SetInsideOut(not self.clipper_b.GetInsideOut())
+        # self.xmin = self.xmin % 256
+        # self.ymin = self.ymin % 256
+        # self.zmin = self.zmin % 113
 
         obj.GetRenderWindow().Render()
 
@@ -172,26 +183,25 @@ def render(acts):
     iren = vtk.vtkRenderWindowInteractor()
     iren.SetRenderWindow(ren_win)
 
-    cb = vtkCallback()
-    cb.actors = acts
-    cb.renderer = ren
-    iren.AddObserver("KeyPressEvent", cb.key_pressed_callback)
+    #cb = vtkCallback()
+    #cb.actors = acts
+    #cb.renderer = ren
+    #iren.AddObserver("KeyPressEvent", cb.key_pressed_callback)
     # Start the initialization and rendering
     iren.Initialize()
 
     #acts[0].VisibilityOff()
     ren_win.Render()
     iren.Start()
-    print(ren.GetNearClippingPlaneTolerance())
-    
+    #print(ren.GetNearClippingPlaneTolerance())
 
 
-def load_binary_values(start=0, stop=0):
+def load_binary_values(start=0, stop=0, path=""):
     # https://stackoverflow.com/questions/1035340/reading-binary-file-and-looping-over-each-byte
     # https://docs.python.org/3/library/stdtypes.html#int.from_bytes
     pixel_vals = []
     for img in range(start, stop):
-        with open("dataset/CThead."+str(img), "rb") as f:
+        with open(path+str(img), "rb") as f:
             byte = 0
             while byte != b"":
                 # Do stuff with byte
@@ -202,93 +212,118 @@ def load_binary_values(start=0, stop=0):
     return pixel_vals
 
 
-def visualise_marching_cubes_2(points, num_slices, width=256, height=256):
+def visualise_marching_cubes_2(points, start_idx, stop_idx, width=256, height=256, iso_value_1=0.1, iso_value_2=0.33, do_smoothing=True, biggest_region=True):
     # https://www.vtk.org/Wiki/VTK/Examples/Python/WriteReadVtkImageData
     # https://www.vtk.org/Wiki/VTK/Examples/Python/vtkCutter
+    num_slices = stop_idx - start_idx
     img_data = vtk.vtkImageData()  # Poly data to hold information about the model
     img_data.SetDimensions(width, height, num_slices)
     img_data.AllocateScalars(vtk.VTK_DOUBLE, 1)  # Need this
     point_counter = 0
+    max_scalar_value = 0
     for z in range(0, num_slices):
         for y in range(0, height):
             for x in range(0, width):
                 img_data.SetScalarComponentFromDouble(x, y, z, 0, points[point_counter])  # Must be double for this version of vtk (>=4.4)
                 point_counter += 1
-
-    # planes = vtk.vtkPlanes()
-    # pp = [(128, 128, 56), (128, 128, 56), (128, 128, 56)]
-    # plane_points = vtk.vtkPoints()
-    # for i in range(0, 1):
-    #     plane_points.InsertNextPoint(pp[i])
-    # planes.SetPoints(plane_points)
-
-    # np = [(1.0, 0.0, 0), (0.0, 1.0, 0), (0.0, 0.0, 1.0)]
-    # normal_points = vtk.vtkDoubleArray()
-    # normal_points.SetNumberOfComponents(3)
-    # normal_points.SetNumberOfTuples(1)
-    # for i in range(0, 1):
-    #     normal_points.SetTuple3(i, np[i][0], np[i][1], np[i][2])
-    # planes.SetNormals(normal_points)
+                if points[point_counter] > max_scalar_value:
+                    max_scalar_value = points[point_counter]
 
     plane = vtk.vtkPlane()
-    plane.SetOrigin(128, 128, 56)
+    plane.SetOrigin(0, height/2, num_slices/2)
     plane.SetNormal(1.0, 0.0, 0.0)
 
     # Skin
-    mc = vtk.vtkMarchingCubes()  # Perform marching cubes
-    mc.ComputeNormalsOn()
-    mc.SetValue(0, 600)
-    mc.SetInputData(img_data)
+    isosurface = vtk.vtkMarchingCubes()  # Perform marching cubes
+    isosurface.ComputeNormalsOn()
+    isosurface.SetValue(0, max_scalar_value*iso_value_1)
+    isosurface.SetInputData(img_data)
+    to_clip = isosurface
+
+    if biggest_region:
+        connect_filter = vtk.vtkConnectivityFilter()
+        connect_filter.SetExtractionModeToLargestRegion()
+        connect_filter.SetInputConnection(isosurface.GetOutputPort())
+        #connect_filter.SetExtractionModeToSpecifiedRegions()
+        #connect_filter.AddSpecifiedRegion(0)
+        connect_filter.SetScalarConnectivity(False)
+        connect_filter.Update()
+        
+        to_clip = connect_filter
+
+    if do_smoothing:
+        smooth = vtk.vtkSmoothPolyDataFilter()  # SHOW WITH AND WITHOUT SMOOTHING
+        smooth.SetNumberOfIterations(15)
+        smooth.SetRelaxationFactor(0.1)
+        smooth.FeatureEdgeSmoothingOn()
+        smooth.BoundarySmoothingOn()
+        smooth.SetInputConnection(isosurface.GetOutputPort())
+        smooth.Update()
+        to_clip = smooth
 
     clipper = vtk.vtkClipPolyData()
-    clipper.SetInputConnection(mc.GetOutputPort())
+    clipper.SetInputConnection(to_clip.GetOutputPort())
     clipper.SetClipFunction(plane)
 
     clip_mapper = vtk.vtkPolyDataMapper()
     clip_mapper.ScalarVisibilityOff()  # Use this to make sure shows the colour given below
     clip_mapper.SetInputConnection(clipper.GetOutputPort())
 
+    back_faces = vtk.vtkProperty()
+    back_faces.SetSpecular(0.0)
+    back_faces.SetDiffuse(0.0)
+    back_faces.SetAmbient(1.0)
+    back_faces.SetAmbientColor(0.7, 0.7, 0.95)
+
     clip_actor = vtk.vtkActor()
     clip_actor.SetMapper(clip_mapper)
     clip_actor.GetProperty().SetDiffuseColor(1, 0.49, 0.25)
-    clip_actor.GetProperty().SetSpecular(0.3)
-    clip_actor.GetProperty().SetSpecularPower(20)
-    clip_actor.GetProperty().SetOpacity(0.5)
+    clip_actor.SetBackfaceProperty(back_faces)
+    
+    acts = [clip_actor]
 
     # Bone
-    mc_bone = vtk.vtkMarchingCubes()
-    mc_bone.ComputeNormalsOn()
-    mc_bone.SetValue(0, 1500)
-    mc_bone.SetInputData(img_data)
+    if iso_value_2 > 0:
+        isosurface = vtk.vtkMarchingCubes()
+        isosurface.ComputeNormalsOn()
+        isosurface.SetValue(0, max_scalar_value*iso_value_2)
+        isosurface.SetInputData(img_data)
+        to_clip = isosurface
 
-    clipper_bone = vtk.vtkClipPolyData()
-    clipper_bone.SetInputConnection(mc_bone.GetOutputPort())
-    clipper_bone.SetClipFunction(plane)
+        if do_smoothing:
+            smooth = vtk.vtkSmoothPolyDataFilter()  # SHOW WITH AND WITHOUT SMOOTHING
+            smooth.SetInputConnection(isosurface.GetOutputPort())
+            smooth.Update()
+            to_clip = smooth
 
-    clip_mapper_bone = vtk.vtkPolyDataMapper()
-    clip_mapper_bone.ScalarVisibilityOff()
-    clip_mapper_bone.SetInputConnection(clipper_bone.GetOutputPort())
+        clipper_2 = vtk.vtkClipPolyData()
+        clipper_2.SetInputConnection(to_clip.GetOutputPort())
+        clipper_2.SetClipFunction(plane)
 
-    clip_actor_bone = vtk.vtkActor()
-    clip_actor_bone.GetProperty().SetColor(1, 1, 0.95)
-    clip_actor_bone.SetMapper(clip_mapper_bone)
+        clip_mapper_2 = vtk.vtkPolyDataMapper()
+        clip_mapper_2.ScalarVisibilityOff()
+        clip_mapper_2.SetInputConnection(clipper_2.GetOutputPort())
 
-    backFaces = vtk.vtkProperty()
-    backFaces.SetSpecular(0.0)
-    backFaces.SetDiffuse(0.0)
-    backFaces.SetAmbient(1.0)
-    backFaces.SetAmbientColor(0.7, 0.7, 0.65)
- 
-    clip_actor_bone.SetBackfaceProperty(backFaces)
+        clip_actor_2 = vtk.vtkActor()
+        clip_actor_2.GetProperty().SetColor(1, 1, 0.95)
+        clip_actor_2.SetMapper(clip_mapper_2)
+        clip_actor_2.SetBackfaceProperty(back_faces)
 
-    acts = [clip_actor, clip_actor_bone]
-    
+        acts.append(clip_actor_2)
+
     # Render
     ren = vtk.vtkRenderer()
     ren.SetBackground(0.329412, 0.34902, 0.427451)  # Paraview blue
 
     for act in acts:
         ren.AddActor(act)
+        act.SetPosition(0, 0, 0)  # Centre the model
+
+    cam = vtk.vtkCamera()
+    cam.SetPosition(-width/2, -300, 0)
+    cam.SetViewUp(0, 0, -1)
+    cam.SetFocalPoint(width/2, height/2, num_slices/2)
+    ren.SetActiveCamera(cam)
 
     # Create a window for the renderer of size 500x500
     ren_win = vtk.vtkRenderWindow()
@@ -299,11 +334,14 @@ def visualise_marching_cubes_2(points, num_slices, width=256, height=256):
     iren = vtk.vtkRenderWindowInteractor()
     iren.SetRenderWindow(ren_win)
 
-    cb = vtkCallback()
+    cb = vtkCallback(width, height, num_slices)
     cb.actors = acts
     cb.renderer = ren
-    #cb.plane_points = plane_points
-    #cb.planes = planes
+    cb.clipper_s = clipper
+    if iso_value_2 > 0:
+        cb.clipper_b = clipper_2
+    else:
+        cb.clipper_b = None
     cb.plane = plane
     iren.AddObserver("KeyPressEvent", cb.key_pressed_callback)
     # Start the initialization and rendering
@@ -312,7 +350,7 @@ def visualise_marching_cubes_2(points, num_slices, width=256, height=256):
     ren_win.Render()
     iren.Start()
 
-
+ 
 
 def visualise_marching_cubes(points, num_slices, width=256, height=256):
     poly_data = vtk.vtkPolyData()  # Poly data to hold information about the model
@@ -692,10 +730,10 @@ def old_attempts(points, num_slices, width=256, height=256):
     return actor
 
 start = 1
-stop = 113
-a = load_binary_values(start, stop+1)
-#act = visualise_convex_hull(a, stop-start, True)
-#act = visualise_point_cloud(a, stop-start)
-act = visualise_marching_cubes_2(a, stop-start)
-
-#render(act)
+stop = 109
+a = load_binary_values(start, stop+1, "MRbrain/MRbrain.")#"dataset/CThead.")
+visualise_marching_cubes_2(a, start, stop, 256, 256, 0.33, 0, True, True)
+#a = load_binary_values(1, 360+1, "bunny/")
+#visualise_marching_cubes_2(a, 1, 360, 512, 512, 0.01, 0.0, False)
+#act = visualise_point_cloud(a, stop-start+1)
+#render([act])
